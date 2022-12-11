@@ -1,0 +1,44 @@
+[Unit]
+Description=Proxy Scraper Checker Service
+Documentation=https://github.com/monosans/proxy-scraper-checker
+After=network.target nss-lookup.target
+Wants=shifter-watch.timer
+
+[Service]
+SyslogIdentifier=shifter-watch
+Restart=on-failure
+ExecStart=/usr/local/bin/shifter --watch
+
+ProtectSystem=strict
+#ProtectHome=tmpfs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectHostname=true
+ProtectClock=true
+ProtectProc=invisible
+ProcSubset=pid
+PrivateTmp=true
+#PrivateUsers=true
+PrivateDevices=true
+PrivateMounts=true
+#PrivateIPC=true
+RemoveIPC=true
+MemoryDenyWriteExecute=true
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+#RestrictAddressFamilies=AF_INET
+RestrictNamespaces=true
+SystemCallFilter=@system-service
+SystemCallFilter=write read openat close brk fstat lseek mmap mprotect munmap rt_sigaction rt_sigprocmask ioctl nanosleep select access execve getuid arch_prctl set_tid_address set_robust_list prlimit64 pread64 getrandom
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+UMask=0077
+#IPAddressDeny=any
+BindPaths=/var/cache/apt /var/lib/dpkg /var/lib/apt /var/log /usr/lib /usr/bin /usr/share /etc /tmp
+
+[Install]
+WantedBy=multi-user.target

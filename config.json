@@ -1,0 +1,90 @@
+{
+  "log": {
+    "disabled": false,
+    "level": "info",
+    "output": "",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "remote",
+        "address": "tls://1.1.1.1"
+      },
+      {
+        "tag": "local",
+        "address": "local",
+        "detour": "direct"
+      }
+    ],
+    "rules": [
+      {
+        "user_id": [
+          100,
+          1000
+        ],
+        "server": "local"
+      }
+    ],
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "stack": "gvisor",
+      "inet4_address": "10.139.1.0/30",
+      "strict_route": true,
+      "auto_route": true,
+      "exclude_uid": [
+        100,
+        1000
+      ],
+      "sniff": true
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "type": "socks",
+      "server": "127.0.0.1",
+      "server_port": 1080,
+      "version": "5"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    },
+    {
+      "type": "dns",
+      "tag": "dns-out"
+    }
+  ],
+  "route": {
+    "geosite": {
+      "path": "/usr/local/share/sing-box/geosite.db"
+    },
+    "geoip": {
+      "path": "/usr/local/share/sing-box/geoip.db"
+    },
+    "rules": [
+      {
+        "protocol": "dns",
+        "outbound": "dns-out"
+      },
+      {
+        "geosite": "category-ads-all",
+        "outbound": "block"
+      },
+      {
+        "geosite": "private",
+        "geoip": "private",
+        "outbound": "direct"
+      }
+    ],
+    "auto_detect_interface": true
+  }
+}

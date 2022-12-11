@@ -1,0 +1,352 @@
+#!/bin/sh
+# shellcheck shell=dash
+
+# This is just a little script that can be downloaded from the internet to
+# install shifter. It just tested in Debian.
+
+set -u
+
+REMOTE="${REMOTE:-https://git.sr.ht/~qubes/shifter/blob/main}"
+REPO_URL="${REPO_URL:-https://github.com/monosans/proxy-scraper-checker/archive/refs/heads/main.tar.gz}"
+UID="765"
+USER="shifter"
+HOME="/home/${USER}"
+SRC="/home/${USER}/.local/src"
+TIMEOUT="${TIMEOUT:-15}"
+CURL_RETRIES="${CURL_RETRIES:-3}"
+
+usage() {
+  cat 1>&2 <<EOF
+shifter
+
+USAGE:
+    shifter [FLAGS]
+
+FLAGS:
+        --install    Install scraper (https://github.com/monosans/proxy-scraper-checker)
+        --watch      Run shifter background to update config.json
+        --fetch      Run shifter background to fetch latest proxies
+    -v, --verbose    Enable verbose output
+    -h, --help       Prints help information
+EOF
+}
+
+main() {
+  if [ "$#" -lt 1 ]; then
+    usage
+    exit 0
+  fi
+
+  for arg in "$@"; do
+    case "$arg" in
+      --help | -h)
+        usage
+        exit 0
+        ;;
+      --verbose | -v)
+        set -x
+        ;;
+    esac
+  done
+
+  for arg in "$@"; do
+    case "$arg" in
+      --install)
+        install
+        ;;
+      --watch)
+        watch
+        ;;
+      --fetch)
+        fetch
+        ;;
+      --help | -h | --verbose | -v)
+        ;;
+      *)
+        err 'invalid flags'
+        ;;
+    esac
+  done
+}
+
+install() {
+  need_sudo
+
+  sudo adduser --system --disabled-password --shell /bin/bash --uid "${UID}" "${USER}"
+  echo "adduser --system --disabled-password --shell /bin/bash --uid ${UID} ${USER}" | sudo tee -a /rw/config/rc.local
+
+  install_cmd curl python3 python3-pip
+  ignore sudo ln -sf "$(which python3)" /usr/local/bin/python
+
+  install_scraper
+  install_sing
+  install_shifter
+
+  say 'install service completed.'
+  say 'restart and enjoy it!'
+}
+
+install_scraper() {
+  say 'installing scraper'
+
+  need_cmd curl
+  need_cmd mktemp
+  need_cmd python3
+  need_cmd pip3
+
+  local _url="${REPO_URL}"
+  local _user="${USER}"
+
+  local _workdir
+  _workdir="$(ensure /bin/mktemp -d)"
+  local _file="/tmp/proxy-scraper-checker.tar.gz"
+
+  ensure cd "${_workdir}"
+  ensure got "${_url}" "${_file}"
+  ensure tar -zxf "${_file}" --strip-components=1 --directory="${_workdir}"
+  ensure sudo chown -R "${_user}:nogroup" "${_workdir}"
+
+  # Needed by python package
+  local _bin="${HOME}/.local/bin"
+  local _dst="${SRC}/proxy-scraper-checker"
+  ensure sudo su "${_user}" -s /bin/mkdir -- -p ${_bin} ${SRC}
+
+  ensure sudo su "${_user}" -s /bin/sh -- -c "cd ${_workdir}; python3 -m pip install -U -r requirements.txt"
+  ensure sudo su "${_user}" -s /bin/mv -- "${_workdir}" "${_dst}"
+  ensure sudo chmod +rx "${_dst}"
+
+  ignore rm -rf "${_workdir}"
+}
+
+install_sing() {
+  say 'installing sing-box'
+
+  need_cmd sed
+  need_cmd curl
+  need_cmd grep
+
+  # Export Qubes DNS nameserver NS1 and NS2
+  # shellcheck source=/dev/null
+  . /var/run/qubes/qubes-ns
+
+  local _workdir
+  _workdir="$(ensure mktemp -d)"
+  local _inet4_addr
+  _inet4_addr="$(echo "${NS1}" | sed 's/[0-9]*$/0/')"
+
+  local _user="${USER}"
+  local _uid
+  _uid="$(id -u "${_user}")"
+
+  ensure cd "${_workdir}"
+
+  ensure got "${REMOTE}/restrict-firewall" restrict-firewall
+  ensure got "${REMOTE}/sing-box.service" sing-box.service
+  ensure got "${REMOTE}/config.json" config.json
+
+  ensure sed -i "s#10.139.1.0#${_inet4_addr}#" config.json
+  ensure sed -i "s#1000#${_uid}#g" config.json
+
+  ensure sudo install -Dm644 -t /rw/bind-dirs/etc/sing-box "${_workdir}/config.json"
+  ensure sudo install -Dm644 -t /rw/bind-dirs/etc/systemd/system/ "${_workdir}/sing-box.service"
+  ensure sudo install -Dm755 -t /rw/config/qubes-firewall.d "${_workdir}/restrict-firewall"
+
+  sudo cp /rw/config/rc.local /rw/config/rc.local.old
+  echo 'systemctl --no-block restart sing-box.service' | sudo tee -a /rw/config/rc.local > /dev/null
+
+  local _latest="latest.json"
+  local _filename="linux-amd64.tar.gz"
+  ensure got https://api.github.com/repos/SagerNet/sing-box/releases/latest "${_latest}"
+  local _url
+  _url="$(grep browser_download_url "${_latest}" | grep "${_filename}" | cut -d\" -f4)"
+  ensure got "${_url}" "${_filename}"
+  ensure tar -zxf "${_filename}" --strip-components=1 --directory="${_workdir}"
+
+  ensure sudo install -Dm755 -t /rw/usrlocal/bin "${_workdir}/sing-box"
+
+  ensure got https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db geoip.db
+  ensure got https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db geosite.db
+
+  ensure sudo install -Dm644 -t /rw/usrlocal/share/sing-box "${_workdir}/geoip.db"
+  ensure sudo install -Dm644 -t /rw/usrlocal/share/sing-box "${_workdir}/geosite.db"
+
+  ignore rm -rf "${_workdir}"
+}
+
+install_shifter() {
+  say 'installing shifter'
+
+  local REMOTE="${REMOTE}"
+  local _workdir
+  _workdir="$(ensure mktemp -d)"
+  local _bin="${_workdir}/shifter"
+
+  ensure cd "${_workdir}"
+
+  ensure got "${REMOTE}/shifter" "${_bin}"
+  ensure got "${REMOTE}/50_shifter.conf" 50_shifter.conf
+  ensure got "${REMOTE}/shifter-watch.service" shifter-watch.service
+  ensure got "${REMOTE}/shifter-fetch.service" shifter-fetch.service
+  ensure got "${REMOTE}/shifter-watch.timer" shifter-watch.timer
+  ensure got "${REMOTE}/shifter-fetch.timer" shifter-fetch.timer
+
+  ensure sudo install -Dm755 -t /rw/usrlocal/bin "${_bin}"
+  ensure sudo install -Dm644 -t /rw/bind-dirs/etc/systemd/system/ shifter-*
+  ensure sudo install -Dm644 -t /rw/config/qubes-bind-dirs.d "${_workdir}/50_shifter.conf"
+
+  echo 'systemctl --no-block restart shifter-watch.timer' | sudo tee -a /rw/config/rc.local > /dev/null
+  echo 'systemctl --no-block restart shifter-fetch.timer' | sudo tee -a /rw/config/rc.local > /dev/null
+  echo 'systemctl --no-block restart shifter-fetch.service' | sudo tee -a /rw/config/rc.local > /dev/null
+
+  ignore rm -rf "${_workdir}"
+}
+
+watch() {
+  need_sudo
+
+  if ! check_cmd curl; then
+    install_cmd curl
+  fi
+
+  need_cmd sed
+  need_cmd curl
+  need_cmd grep
+
+  local _cfgpath="/etc/sing-box/config.json"
+  local _ip
+  _ip="$(grep -Eo "server\":.*" "${_cfgpath}" | grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}")"
+  local _port
+  _port="$(grep -Eo "server_port\":.*" "${_cfgpath}" | grep -Eo "[0-9]{1,5}")"
+
+  local _ok=0
+  local _newip="${_ip}"
+  local _newport="${_port}"
+  local _host="${_ip}:${_port}"
+
+  ping "${_host}"
+  if [ $? = ${_ok} ]; then
+    say "host ${_host} still working, skipped."
+    exit 0
+  fi
+  say "host ${_host} not working, try a new host."
+
+  local _path="${SRC}/proxy-scraper-checker"
+  local _files
+  _files="$(find ${_path} -name "socks5.txt" '!' -path '*geo*')"
+
+  # using parallel jobs in python?
+  for file in $_files; do
+    say "read file: ${file}"
+    if [ ! -f "${file}" ]; then
+      say "${file} not found, please run 'shifter --fetch'"
+      continue
+    fi
+
+    while IFS= read -r host
+    do
+      ping "${host}"
+      if [ $? = ${_ok} ]; then
+        say "host ${host} is ok."
+        _newip="$(echo "${host}" | sed -e 's/:.*$//')"
+        _newport="$(echo "${host}" | sed -e 's/^.*://')"
+        break
+      else
+        say "host ${host} can not access, delete it and try next..."
+        sudo su "${USER}" -s /bin/sh -- -c "sed -i '/${host}/d' ${file}"
+      fi
+    done < "${file}"
+  done
+
+  if [ "${_newip}" = "${_ip}" ]; then
+    say 'host not found, wait for the next round...'
+    exit 0
+  fi
+
+  sed -i "s/${_ip}/${_newip}/" $_cfgpath
+  sed -i "s/${_port}/${_newport}/" $_cfgpath
+
+  ensure sudo systemctl --no-block restart sing-box
+}
+
+fetch() {
+  need_cmd python3
+
+  if [ ! "$(whoami)" = "${USER}" ]; then
+    err "please execute with user '${USER}'"
+  fi
+
+  local _dir="${SRC}/proxy-scraper-checker"
+
+  ensure cd "${_dir}"
+  python3 main.py
+}
+
+ping() {
+  need_cmd curl
+
+  local _resp
+  local _retry="${CURL_RETRIES}"
+  local _status
+  local _endpoint="https://example.org"
+
+  _resp=$(sudo su "${USER}" -s /bin/sh -- -c "curl -sSf -tlsv1.3 --proto '=https' --connect-timeout ${TIMEOUT} --retry ${_retry} -w '%{http_code}' --socks5 $1 -o /dev/null ${_endpoint}")
+  _status=$?
+
+  return $_status
+}
+
+say() {
+  printf 'Shifter: %s\n' "$1"
+}
+
+err() {
+  say "$1" >&2
+  exit 1
+}
+
+need_cmd() {
+  if ! check_cmd "$1"; then
+    err "need '$1' (command not found)"
+  fi
+}
+
+check_cmd() {
+  command -v "$1" > /dev/null 2>&1
+}
+
+need_sudo() {
+  sudo -nv 2>&1 || err "need 'sudo' access"
+}
+
+ensure() {
+  if ! "$@"; then err "command failed: $*"; fi
+}
+
+ignore() {
+  "$@"
+}
+
+install_cmd() {
+  local _pkgs=""
+
+  for pkg in "$@"; do
+    _pkgs="${_pkgs} ${pkg}"
+  done
+
+  sudo sh -c "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${_pkgs}"
+}
+
+got() {
+  need_cmd curl
+
+  local _err
+  local _retry="${CURL_RETRIES}"
+  local _status
+
+  _err=$(curl --proto '=https' --tlsv1.2 -sSfL --retry "${_retry}" "$1" --output "$2" 2>&1)
+  _status=$?
+
+  return $_status
+}
+
+main "$@" || exit 1

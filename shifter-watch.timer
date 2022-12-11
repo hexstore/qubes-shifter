@@ -1,0 +1,10 @@
+[Unit]
+Description=Update proxy configuration every 30s.
+
+[Timer]
+Unit=shifter-watch.service
+OnCalendar=*-*-* *:*:00,30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Proxy Scraper Checker every 5min.
+
+[Timer]
+Unit=shifter-fetch.service
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -2,6 +2,8 @@
 
 这是一个在Qubes OS中安装公共代理的方案，旨在帮助Qubes OS用户增强匿名环境下的网络可用性，它可被用做多重代理。
 
+该项目主仓库在[sourcehut](https://git.sr.ht/~qubes/shifter)上，并镜像在[GitHub](https://github.com/hexstore/qubes-shifter)。
+
 注意：**这是一个实验性项目，有关公共代理的潜在风险需要自行衡量！**
 
 ## 工作原理
